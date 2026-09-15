@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+data/*.sqlite*
+data/templates/*.pdf
+data/completed/*.pdf
+!data/templates/.gitkeep
+!data/completed/.gitkeep
