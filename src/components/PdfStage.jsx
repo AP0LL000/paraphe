@@ -1,6 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 
+function createFieldId() {
+  const browserCrypto = typeof window !== "undefined" ? window.crypto : null;
+  if (typeof browserCrypto?.randomUUID === "function") return browserCrypto.randomUUID();
+
+  const bytes = new Uint8Array(16);
+  if (typeof browserCrypto?.getRandomValues === "function") {
+    browserCrypto.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 export default function PdfStage({
   template,
   fields,
@@ -115,7 +133,7 @@ export default function PdfStage({
   const pageFields = fields.filter((field) => field.page === pageIndex);
 
   function addField(event) {
-    if (readOnly || !tool || event.target !== event.currentTarget) return;
+    if (readOnly || !tool || (typeof event.button === "number" && event.button !== 0)) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     const fieldWidth = tool === "signature" ? 0.42 : 0.36;
     const fieldHeight = tool === "signature" ? 0.12 : 0.06;
@@ -123,7 +141,7 @@ export default function PdfStage({
     const y = Math.max(0, Math.min(1 - fieldHeight, (event.clientY - bounds.top) / bounds.height - fieldHeight / 2));
     const count = fields.filter((field) => field.type === tool).length + 1;
     const field = {
-      id: crypto.randomUUID(),
+      id: createFieldId(),
       type: tool,
       label: tool === "signature" ? "Votre signature" : `Champ texte ${count}`,
       page: pageIndex,
@@ -195,7 +213,7 @@ export default function PdfStage({
 
       <div className="pdf-sheet" style={{ width: pageSize.width, height: pageSize.height }}>
         <canvas ref={canvasRef} aria-label={`Aperçu de la page ${pageIndex + 1}`} />
-        <div className={`field-layer ${tool && !readOnly ? "is-placing" : ""}`} onPointerDown={addField}>
+        <div className={`field-layer ${tool && !readOnly ? "is-placing" : ""}`} onClick={addField}>
           {pageFields.map((field) => (
             <div
               key={field.id}
@@ -206,6 +224,7 @@ export default function PdfStage({
                 width: `${field.width * 100}%`,
                 height: `${field.height * 100}%`,
               }}
+              onClick={(event) => event.stopPropagation()}
               onPointerDown={(event) => startDrag(event, field, "move")}
               onPointerMove={moveDrag}
               onPointerUp={endDrag}
