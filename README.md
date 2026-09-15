@@ -8,7 +8,8 @@ Le parcours est volontairement simple :
 2. placer les zones de texte et de signature sur les pages ;
 3. sélectionner le document dans la bibliothèque ;
 4. remplir un formulaire adapté au téléphone et signer avec le doigt ;
-5. générer une nouvelle copie PDF, l’envoyer par email et la rendre téléchargeable.
+5. générer une nouvelle copie PDF et contrôler son aperçu final ;
+6. confirmer l’envoi par email ou revenir corriger le formulaire.
 
 Les originaux sont conservés séparément des documents finalisés.
 
@@ -31,7 +32,7 @@ npm run check
 npm test
 ```
 
-Le test couvre automatiquement le dépôt d’un PDF, l’enregistrement des zones, la signature, la création du PDF final et son téléchargement.
+Le test couvre automatiquement le dépôt d’un PDF, l’enregistrement des zones, la signature, l’aperçu du PDF final et son téléchargement.
 
 ## Activer l’envoi par email
 
@@ -46,7 +47,7 @@ SMTP_PASS=mot-de-passe-application
 MAIL_FROM=Paraphe <documents@example.com>
 ```
 
-Utilisez de préférence un mot de passe d’application. Si SMTP n’est pas configuré ou si l’envoi échoue, le PDF final reste disponible au téléchargement.
+Les valeurs de `.env.example` sont volontairement fictives et ne permettent aucun envoi. Remplacez les cinq valeurs SMTP par celles d’un vrai compte expéditeur, puis redémarrez le serveur. Utilisez de préférence un mot de passe d’application. Si SMTP n’est pas configuré ou si l’envoi échoue, le PDF final reste disponible dans l’étape d’aperçu et au téléchargement.
 
 ## Utiliser le site depuis un téléphone
 

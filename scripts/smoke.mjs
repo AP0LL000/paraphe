@@ -6,7 +6,17 @@ const port = 43_000 + crypto.randomInt(1_000);
 const baseUrl = `http://127.0.0.1:${port}`;
 const server = spawn(process.execPath, ["server/index.js"], {
   cwd: new URL("..", import.meta.url),
-  env: { ...process.env, NODE_ENV: "production", HOST: "127.0.0.1", PORT: String(port) },
+  env: {
+    ...process.env,
+    NODE_ENV: "production",
+    HOST: "127.0.0.1",
+    PORT: String(port),
+    SMTP_HOST: "",
+    SMTP_PORT: "",
+    SMTP_USER: "",
+    SMTP_PASS: "",
+    MAIL_FROM: "",
+  },
   stdio: ["ignore", "pipe", "pipe"],
 });
 
@@ -80,10 +90,19 @@ async function run() {
   const completion = new FormData();
   completion.set("values", JSON.stringify({ [textId]: "Valeur de test" }));
   completion.set("signature", new Blob([signature], { type: "image/png" }), "signature.png");
-  const completed = await json(await fetch(`${baseUrl}/api/templates/${templateId}/complete`, {
+  const completed = await json(await fetch(`${baseUrl}/api/templates/${templateId}/preview`, {
     method: "POST",
     body: completion,
   }));
+
+  const previewed = await fetch(`${baseUrl}${completed.previewUrl}`);
+  const previewBytes = Buffer.from(await previewed.arrayBuffer());
+  if (!previewed.ok || previewBytes.subarray(0, 5).toString("ascii") !== "%PDF-") {
+    throw new Error("L’aperçu final n’est pas consultable.");
+  }
+
+  const blockedSend = await fetch(`${baseUrl}/api/completed/${completed.completionId}/send`, { method: "POST" });
+  if (blockedSend.status !== 503) throw new Error("L’envoi sans configuration SMTP aurait dû être bloqué.");
 
   const downloaded = await fetch(`${baseUrl}${completed.downloadUrl}`);
   const bytes = Buffer.from(await downloaded.arrayBuffer());
@@ -93,7 +112,7 @@ async function run() {
 
   await json(await fetch(`${baseUrl}/api/templates/${templateId}`, { method: "DELETE" }));
   templateId = undefined;
-  console.log(`Parcours validé : dépôt, zones, signature et PDF final (${bytes.length} octets).`);
+  console.log(`Parcours validé : dépôt, zones, signature, aperçu et PDF final (${bytes.length} octets).`);
 }
 
 try {

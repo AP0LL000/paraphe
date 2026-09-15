@@ -8,6 +8,7 @@ import express from "express";
 import multer from "multer";
 
 import {
+  deleteCompletion,
   deleteTemplate,
   getCompletion,
   getTemplate,
@@ -15,6 +16,7 @@ import {
   insertTemplate,
   listTemplateFiles,
   listTemplates,
+  updateCompletionEmailStatus,
   updateTemplateFields,
 } from "./db.js";
 import { isMailConfigured, sendCompletedPdf } from "./mail.js";
@@ -224,7 +226,7 @@ app.put("/api/templates/:id/fields", (request, response) => {
 });
 
 app.post(
-  "/api/templates/:id/complete",
+  "/api/templates/:id/preview",
   uploadSignature.single("signature"),
   async (request, response) => {
     let completedPath;
@@ -245,7 +247,7 @@ app.post(
         }
       }
       if (!request.file || !pngMagic(request.file.buffer)) {
-        return response.status(400).json({ ok: false, message: "Dessinez votre signature avant l’envoi." });
+        return response.status(400).json({ ok: false, message: "Dessinez votre signature avant de créer l’aperçu." });
       }
 
       const source = await fs.readFile(template.file_path);
@@ -253,49 +255,93 @@ app.post(
       const completionId = crypto.randomUUID();
       completedPath = path.join(completionDirectory, `${completionId}.pdf`);
       await fs.writeFile(completedPath, completedPdf, { flag: "wx" });
-      const completedName = `${template.original_name.replace(/\.pdf$/i, "")}-signe.pdf`;
-
-      let emailStatus = "not_configured";
-      let emailMessage = "Le PDF est prêt. Configurez le serveur SMTP pour activer l’envoi automatique.";
-      try {
-        const mail = await sendCompletedPdf({
-          to: template.recipient_email,
-          title: template.title,
-          filename: completedName,
-          content: completedPdf,
-        });
-        if (mail.sent) {
-          emailStatus = "sent";
-          emailMessage = `Le PDF signé a été envoyé à ${template.recipient_email}.`;
-        }
-      } catch {
-        emailStatus = "failed";
-        emailMessage = "Le PDF est prêt, mais l’email n’a pas pu être envoyé. Vous pouvez le télécharger.";
-      }
 
       insertCompletion({
         id: completionId,
         templateId: template.id,
         filePath: completedPath,
         recipientEmail: template.recipient_email,
-        emailStatus,
+        emailStatus: "pending",
         createdAt: new Date().toISOString(),
       });
 
       return response.status(201).json({
         ok: true,
         completionId,
-        emailSent: emailStatus === "sent",
-        message: emailMessage,
+        emailSent: false,
+        recipientEmail: template.recipient_email,
+        previewUrl: `/api/completed/${completionId}/preview`,
         downloadUrl: `/api/completed/${completionId}/file`,
+        message: "Vérifiez le PDF final avant de confirmer son envoi.",
       });
     } catch (error) {
-      console.error("Échec de finalisation du document :", error);
+      console.error("Échec de création de l’aperçu :", error);
       if (completedPath) await fs.unlink(completedPath).catch(() => undefined);
-      return response.status(500).json({ ok: false, message: "Le document n’a pas pu être finalisé." });
+      return response.status(500).json({ ok: false, message: "L’aperçu du document n’a pas pu être créé." });
     }
   },
 );
+
+app.post("/api/completed/:id/send", async (request, response) => {
+  if (!validId(request.params.id)) return response.status(404).json({ ok: false, message: "Document introuvable." });
+  const completion = getCompletion(request.params.id);
+  if (!completion) return response.status(404).json({ ok: false, message: "Document introuvable." });
+  const template = getTemplate(completion.template_id);
+  if (!template) return response.status(404).json({ ok: false, message: "Modèle introuvable." });
+
+  const downloadUrl = `/api/completed/${completion.id}/file`;
+  if (completion.email_status === "sent") {
+    return response.json({
+      ok: true,
+      emailSent: true,
+      message: `Le PDF signé a déjà été envoyé à ${completion.recipient_email}.`,
+      downloadUrl,
+    });
+  }
+  if (!isMailConfigured()) {
+    return response.status(503).json({
+      ok: false,
+      message: "L’envoi email n’est pas encore configuré. Le PDF reste disponible au téléchargement.",
+      downloadUrl,
+    });
+  }
+
+  try {
+    const content = await fs.readFile(completion.file_path);
+    const filename = `${template.original_name.replace(/\.pdf$/i, "")}-signe.pdf`;
+    await sendCompletedPdf({
+      to: completion.recipient_email,
+      title: template.title,
+      filename,
+      content,
+    });
+    updateCompletionEmailStatus(completion.id, "sent");
+    return response.json({
+      ok: true,
+      emailSent: true,
+      message: `Le PDF signé a été envoyé à ${completion.recipient_email}.`,
+      downloadUrl,
+    });
+  } catch (error) {
+    updateCompletionEmailStatus(completion.id, "failed");
+    console.error("Échec de l’envoi email :", error instanceof Error ? error.message : error);
+    return response.status(502).json({
+      ok: false,
+      message: "Le serveur email a refusé l’envoi. Vérifiez ses identifiants, puis réessayez.",
+      downloadUrl,
+    });
+  }
+});
+
+app.get("/api/completed/:id/preview", (request, response) => {
+  if (!validId(request.params.id)) return response.status(404).end();
+  const completion = getCompletion(request.params.id);
+  if (!completion) return response.status(404).end();
+  response.setHeader("Cache-Control", "private, no-store");
+  response.setHeader("Content-Type", "application/pdf");
+  response.setHeader("Content-Disposition", "inline; filename=\"document-a-verifier.pdf\"");
+  return response.sendFile(completion.file_path);
+});
 
 app.get("/api/completed/:id/file", (request, response) => {
   if (!validId(request.params.id)) return response.status(404).end();
@@ -303,6 +349,18 @@ app.get("/api/completed/:id/file", (request, response) => {
   if (!completion) return response.status(404).end();
   response.setHeader("Cache-Control", "private, no-store");
   return response.download(completion.file_path, "document-signe.pdf");
+});
+
+app.delete("/api/completed/:id", async (request, response) => {
+  if (!validId(request.params.id)) return response.status(404).json({ ok: false, message: "Document introuvable." });
+  const completion = getCompletion(request.params.id);
+  if (!completion) return response.status(404).json({ ok: false, message: "Document introuvable." });
+  if (completion.email_status === "sent") {
+    return response.status(409).json({ ok: false, message: "Un document déjà envoyé ne peut pas être supprimé ici." });
+  }
+  deleteCompletion(completion.id);
+  await fs.unlink(completion.file_path).catch(() => undefined);
+  return response.json({ ok: true });
 });
 
 app.delete("/api/templates/:id", async (request, response) => {

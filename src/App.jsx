@@ -30,13 +30,15 @@ function WorkflowSteps({ mode }) {
     upload: 0,
     prepare: 1,
     fill: 2,
-    complete: 3,
+    review: 3,
+    complete: 4,
   }[mode] ?? 0;
   const steps = [
     ["Documents", "Choisir"],
     ["Zones", "Préparer"],
     ["Formulaire", "Remplir"],
-    ["Terminé", "Envoyer"],
+    ["Aperçu", "Vérifier"],
+    ["Terminé", "Envoyé"],
   ];
 
   return (
@@ -193,10 +195,10 @@ export default function App() {
     }
   }
 
-  async function submitCompleted(event) {
+  async function createFinalPreview(event) {
     event.preventDefault();
     if (!activeTemplate || !signature) {
-      showNotice("Dessinez votre signature avant l’envoi.", "error");
+      showNotice("Dessinez votre signature avant de créer l’aperçu.", "error");
       return;
     }
     setBusy(true);
@@ -207,18 +209,56 @@ export default function App() {
       form.set("values", JSON.stringify(values));
       form.set("signature", signatureBlob, "signature.png");
       const body = await readResponse(
-        await fetch(`/api/templates/${activeTemplate.id}/complete`, {
+        await fetch(`/api/templates/${activeTemplate.id}/preview`, {
           method: "POST",
           body: form,
         }),
       );
       setCompletion(body);
+      setMode("review");
+      showNotice("Aperçu créé. Vérifiez chaque page avant de confirmer l’envoi.");
+    } catch (error) {
+      showNotice(error.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendFinalDocument() {
+    if (!completion?.completionId) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const body = await readResponse(
+        await fetch(`/api/completed/${completion.completionId}/send`, { method: "POST" }),
+      );
+      setCompletion((current) => ({ ...current, ...body }));
       setMode("complete");
     } catch (error) {
       showNotice(error.message, "error");
     } finally {
       setBusy(false);
     }
+  }
+
+  function discardPreview() {
+    const pendingId = completion?.completionId;
+    if (pendingId && !completion?.emailSent) {
+      fetch(`/api/completed/${pendingId}`, { method: "DELETE" }).catch(() => undefined);
+    }
+    setCompletion(null);
+  }
+
+  function editPreviewForm() {
+    discardPreview();
+    setMode("fill");
+    showNotice("Modifiez les informations ou la signature, puis recréez l’aperçu.");
+    goToWorkspace();
+  }
+
+  function cancelPreview() {
+    discardPreview();
+    openLibrary();
   }
 
   function editCompletedForm() {
@@ -330,7 +370,7 @@ export default function App() {
           {!emailConfigured && (
             <div className="configuration-note">
               <Icon name="mail" />
-              <span>L’envoi email sera actif dès que les paramètres SMTP seront renseignés dans le fichier <code>.env</code>.</span>
+              <span>L’envoi email n’est pas encore connecté. Remplacez les valeurs d’exemple SMTP dans <code>.env</code> par celles du compte expéditeur.</span>
             </div>
           )}
 
@@ -383,8 +423,19 @@ export default function App() {
                 signature={signature}
                 onSignature={setSignature}
                 onBack={openLibrary}
-                onSubmit={submitCompleted}
+                onSubmit={createFinalPreview}
                 busy={busy}
+              />
+            )}
+            {!loading && mode === "review" && activeTemplate && completion && (
+              <FinalReview
+                template={activeTemplate}
+                result={completion}
+                emailConfigured={emailConfigured}
+                busy={busy}
+                onSend={sendFinalDocument}
+                onEdit={editPreviewForm}
+                onCancel={cancelPreview}
               />
             )}
             {!loading && mode === "complete" && completion && (
@@ -561,14 +612,54 @@ function FillForm({ template, orderedFields, values, onValues, signature, onSign
           </div>
         ))}
         <SignaturePad stepNumber={totalSteps} value={signature} onChange={onSignature} />
-        <div className="destination"><Icon name="mail" /><span>Envoi prévu vers <strong>{template.recipientEmail}</strong></span></div>
-        <button className="sign-submit" type="submit" disabled={busy}>{busy ? "Création du PDF…" : "Créer le PDF et l’envoyer"}<span aria-hidden="true" /></button>
+        <div className="destination"><Icon name="mail" /><span>Après vérification, envoi prévu vers <strong>{template.recipientEmail}</strong></span></div>
+        <button className="sign-submit" type="submit" disabled={busy}>{busy ? "Création de l’aperçu…" : "Créer l’aperçu final"}<span aria-hidden="true" /></button>
       </div>
       <aside className="preview-column">
         <p>Aperçu du document</p>
         <PdfStage template={template} fields={template.fields} readOnly />
       </aside>
     </form>
+  );
+}
+
+function FinalReview({ template, result, emailConfigured, busy, onSend, onEdit, onCancel }) {
+  return (
+    <div className="review-view">
+      <div className="review-heading">
+        <p className="eyebrow">Étape 4 · Vérification</p>
+        <h3>Vérifiez le document final</h3>
+        <p>Les réponses et la signature sont déjà intégrées au PDF. Parcourez toutes les pages avant de confirmer.</p>
+      </div>
+      <div className="review-grid">
+        <section className="review-document" aria-label="Aperçu du PDF final">
+          <PdfStage template={template} fields={[]} readOnly fileUrl={result.previewUrl} />
+        </section>
+        <aside className="review-panel">
+          <span className="review-status">Prêt à vérifier</span>
+          <h4>Tout est correct ?</h4>
+          <p>Le document ne sera envoyé qu’après votre confirmation.</p>
+          <div className="review-recipient">
+            <Icon name="mail" />
+            <span>Destinataire<strong>{result.recipientEmail || template.recipientEmail}</strong></span>
+          </div>
+          <div className={`mail-readiness ${emailConfigured ? "ready" : "missing"}`} role="status">
+            <b>{emailConfigured ? "Envoi email configuré" : "Envoi email non configuré"}</b>
+            <span>
+              {emailConfigured
+                ? "La confirmation enverra immédiatement le PDF en pièce jointe."
+                : "Ajoutez les vrais paramètres SMTP du compte expéditeur. En attendant, téléchargez le PDF."}
+            </span>
+          </div>
+          <a className="review-download" href={result.downloadUrl}><Icon name="download" />Télécharger pour contrôler</a>
+          <button className="review-send" type="button" onClick={onSend} disabled={busy || !emailConfigured}>
+            {busy ? "Envoi en cours…" : emailConfigured ? "Confirmer et envoyer" : "Envoi indisponible"}
+          </button>
+          <button className="review-edit" type="button" onClick={onEdit}>← Modifier le formulaire</button>
+          <button className="review-cancel" type="button" onClick={onCancel}>Annuler et revenir aux documents</button>
+        </aside>
+      </div>
+    </div>
   );
 }
 

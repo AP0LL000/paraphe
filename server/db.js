@@ -119,6 +119,17 @@ export function getCompletion(id) {
   return database.prepare("SELECT * FROM completions WHERE id = ?").get(id) ?? null;
 }
 
+export function updateCompletionEmailStatus(id, status) {
+  const result = database
+    .prepare("UPDATE completions SET email_status = ? WHERE id = ?")
+    .run(status, id);
+  return result.changes ? getCompletion(id) : null;
+}
+
+export function deleteCompletion(id) {
+  return database.prepare("DELETE FROM completions WHERE id = ?").run(id).changes > 0;
+}
+
 export function listTemplateFiles(id) {
   const template = getTemplate(id);
   if (!template) return [];

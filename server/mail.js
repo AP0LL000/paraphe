@@ -1,12 +1,27 @@
 import nodemailer from "nodemailer";
 
 export function isMailConfigured() {
+  const host = String(process.env.SMTP_HOST || "").trim();
+  const port = Number(process.env.SMTP_PORT);
+  const user = String(process.env.SMTP_USER || "").trim();
+  const password = String(process.env.SMTP_PASS || "").trim();
+  const from = String(process.env.MAIL_FROM || "").trim();
+  const placeholders = [
+    host === "smtp.example.com",
+    user === "utilisateur",
+    password === "mot-de-passe-application",
+    from.includes("documents@example.com"),
+  ];
+
   return Boolean(
-    process.env.SMTP_HOST &&
-      process.env.SMTP_PORT &&
-      process.env.SMTP_USER &&
-      process.env.SMTP_PASS &&
-      process.env.MAIL_FROM,
+    host &&
+      Number.isInteger(port) &&
+      port > 0 &&
+      port <= 65_535 &&
+      user &&
+      password &&
+      from.includes("@") &&
+      !placeholders.some(Boolean),
   );
 }
 

@@ -27,6 +27,7 @@ export default function PdfStage({
   selectedId,
   onSelect,
   readOnly = false,
+  fileUrl,
 }) {
   const shellRef = useRef(null);
   const canvasRef = useRef(null);
@@ -38,6 +39,7 @@ export default function PdfStage({
   const [pageSize, setPageSize] = useState({ width: 1, height: 1 });
   const [status, setStatus] = useState("loading");
   const [retryKey, setRetryKey] = useState(0);
+  const sourceUrl = fileUrl || `/api/templates/${template.id}/file`;
 
   useEffect(() => {
     const shell = shellRef.current;
@@ -57,7 +59,7 @@ export default function PdfStage({
 
     Promise.all([
       import("pdfjs-dist/legacy/build/pdf.mjs"),
-      fetch(`/api/templates/${template.id}/file`, {
+      fetch(sourceUrl, {
         credentials: "same-origin",
         signal: controller.signal,
       }),
@@ -90,7 +92,7 @@ export default function PdfStage({
       task?.destroy();
       pdfRef.current = null;
     };
-  }, [template.id, retryKey]);
+  }, [retryKey, sourceUrl]);
 
   useEffect(() => {
     if (status !== "ready" || !pdfRef.current || !canvasRef.current || !width) return undefined;
