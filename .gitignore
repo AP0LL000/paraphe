@@ -4,5 +4,6 @@ dist/
 data/*.sqlite*
 data/templates/*.pdf
 data/completed/*.pdf
+tmp/
 !data/templates/.gitkeep
 !data/completed/.gitkeep

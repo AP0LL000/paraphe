@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 
 export default function PdfStage({
   template,
@@ -19,6 +19,7 @@ export default function PdfStage({
   const [width, setWidth] = useState(0);
   const [pageSize, setPageSize] = useState({ width: 1, height: 1 });
   const [status, setStatus] = useState("loading");
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     const shell = shellRef.current;
@@ -33,56 +34,78 @@ export default function PdfStage({
   useEffect(() => {
     let cancelled = false;
     let task = null;
+    const controller = new AbortController();
     setStatus("loading");
-    import("pdfjs-dist")
-      .then((pdfjs) => {
+
+    Promise.all([
+      import("pdfjs-dist/legacy/build/pdf.mjs"),
+      fetch(`/api/templates/${template.id}/file`, {
+        credentials: "same-origin",
+        signal: controller.signal,
+      }),
+    ])
+      .then(async ([pdfjs, response]) => {
+        if (!response.ok) throw new Error(`Le serveur a répondu ${response.status}.`);
         pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-        task = pdfjs.getDocument(`/api/templates/${template.id}/file`);
+        const data = new Uint8Array(await response.arrayBuffer());
+        if (cancelled) return null;
+        task = pdfjs.getDocument({ data });
         return task.promise;
       })
       .then((pdf) => {
+        if (!pdf) return undefined;
         if (cancelled) return pdf.destroy();
         pdfRef.current = pdf;
         setPageIndex((current) => Math.min(current, pdf.numPages - 1));
         setStatus("ready");
         return undefined;
       })
-      .catch(() => !cancelled && setStatus("error"));
+      .catch((error) => {
+        if (cancelled || error?.name === "AbortError") return;
+        console.error("Impossible de charger l’aperçu PDF.", error);
+        setStatus("error");
+      });
     return () => {
       cancelled = true;
+      controller.abort();
       renderRef.current?.cancel();
       task?.destroy();
       pdfRef.current = null;
     };
-  }, [template.id]);
+  }, [template.id, retryKey]);
 
   useEffect(() => {
     if (status !== "ready" || !pdfRef.current || !canvasRef.current || !width) return undefined;
     let cancelled = false;
     renderRef.current?.cancel();
-    pdfRef.current.getPage(pageIndex + 1).then((page) => {
-      if (cancelled) return;
-      const initial = page.getViewport({ scale: 1 });
-      const viewport = page.getViewport({ scale: width / initial.width });
-      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-      const canvas = canvasRef.current;
-      const context = canvas.getContext("2d", { alpha: false });
-      canvas.width = Math.floor(viewport.width * pixelRatio);
-      canvas.height = Math.floor(viewport.height * pixelRatio);
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
-      setPageSize({ width: viewport.width, height: viewport.height });
-      const job = page.render({
-        canvasContext: context,
-        canvas,
-        viewport,
-        transform: pixelRatio === 1 ? undefined : [pixelRatio, 0, 0, pixelRatio, 0, 0],
+    pdfRef.current
+      .getPage(pageIndex + 1)
+      .then((page) => {
+        if (cancelled) return;
+        const initial = page.getViewport({ scale: 1 });
+        const viewport = page.getViewport({ scale: width / initial.width });
+        const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+        const canvas = canvasRef.current;
+        const context = canvas.getContext("2d", { alpha: false });
+        canvas.width = Math.floor(viewport.width * pixelRatio);
+        canvas.height = Math.floor(viewport.height * pixelRatio);
+        canvas.style.width = `${viewport.width}px`;
+        canvas.style.height = `${viewport.height}px`;
+        setPageSize({ width: viewport.width, height: viewport.height });
+        const job = page.render({
+          canvasContext: context,
+          canvas,
+          viewport,
+          transform: pixelRatio === 1 ? undefined : [pixelRatio, 0, 0, pixelRatio, 0, 0],
+        });
+        renderRef.current = job;
+        return job.promise;
+      })
+      .catch((error) => {
+        if (cancelled || error?.name === "RenderingCancelledException") return;
+        console.error("Impossible d’afficher la page du PDF.", error);
+        setStatus("error");
       });
-      renderRef.current = job;
-      job.promise.catch((error) => {
-        if (error?.name !== "RenderingCancelledException") setStatus("error");
-      });
-    });
     return () => {
       cancelled = true;
       renderRef.current?.cancel();
@@ -203,7 +226,14 @@ export default function PdfStage({
           ))}
         </div>
         {status === "loading" && <div className="pdf-feedback">Chargement du PDF…</div>}
-        {status === "error" && <div className="pdf-feedback error">L’aperçu ne peut pas être affiché.</div>}
+        {status === "error" && (
+          <div className="pdf-feedback error">
+            <span>L’aperçu ne peut pas être affiché.</span>
+            <button type="button" onClick={() => setRetryKey((value) => value + 1)}>
+              Réessayer
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
